@@ -10,7 +10,7 @@
 // @connect      www.patreon.com
 // @updateURL    https://raw.githubusercontent.com/trevormimano-svg/motm-userscripts/main/motm-patreon-ingest.user.js
 // @downloadURL  https://raw.githubusercontent.com/trevormimano-svg/motm-userscripts/main/motm-patreon-ingest.user.js
-// @version      1.2.0
+// @version      1.3.0
 // @description  Auto-ingest Patreon post bodies to MOTM intel pipeline during normal browsing. Live mode + operator-initiated catch-up. ToS-clean: runs in your authenticated browser, identical fingerprint to manual select-copy-paste.
 // @author       MOTM
 // @run-at       document-idle
@@ -51,9 +51,59 @@
     const EXTRACTORS = [
         { name: 'data-tag=post-content', selector: '[data-tag="post-content"]' },
         { name: 'data-tag=post-html-content', selector: '[data-tag="post-html-content"]' },
+        { name: 'data-tag=post-body', selector: '[data-tag="post-body"]' },
+        { name: 'data-tag=content', selector: '[data-tag="content"]' },
         { name: 'class=post-content', selector: '.post-content' },
         { name: 'class=postContent', selector: '[class*="postContent"]' },
+        { name: 'class=postBody', selector: '[class*="postBody"]' },
+        { name: 'class=post_body', selector: '[class*="post_body"]' },
+        { name: 'class=post-body', selector: '[class*="post-body"]' },
+        { name: 'data-test-name=post-body', selector: '[data-test-name*="post-body"]' },
+        { name: 'data-test-tag=post-content', selector: '[data-test-tag*="post-content"]' },
     ];
+
+    function classString(el) {
+        // SVG elements have SVGAnimatedString, not String — guard against .slice crashes.
+        const c = el.className;
+        if (typeof c === 'string') return c;
+        if (c && typeof c.baseVal === 'string') return c.baseVal;
+        return '';
+    }
+
+    function looksLikeProse(text) {
+        // Heuristic: post bodies have multiple sentences with letters + spaces.
+        const t = (text || '').trim();
+        if (t.length < 200) return 0;
+        const sentenceTerminators = (t.match(/[.!?]\s/g) || []).length;
+        const letterRatio = (t.match(/[a-zA-Z]/g) || []).length / t.length;
+        return sentenceTerminators * (letterRatio > 0.5 ? 1 : 0);
+    }
+
+    function densityExtract(doc) {
+        // Walk every block-level element; score by prose-likeness + size; pick the best.
+        // Skip elements whose textContent is dominated by a single child (containers).
+        const blocks = doc.querySelectorAll('article, section, main, div');
+        let best = null;
+        let bestScore = 0;
+        for (const el of blocks) {
+            const text = (el.textContent || '').trim();
+            if (text.length < 300 || text.length > 80000) continue;
+            const cls = classString(el).toLowerCase();
+            if (/sidebar|footer|header|nav|menu|comment|cookie|banner|modal/.test(cls)) continue;
+            // Avoid pure containers: require the element itself to add something.
+            const childMaxText = Math.max(0, ...Array.from(el.children).map((c) => (c.textContent || '').length));
+            const ownContribution = text.length - childMaxText;
+            if (ownContribution < 100 && el.children.length === 1) continue;
+            const proseScore = looksLikeProse(text);
+            const sizeScore = Math.min(text.length / 1000, 50);
+            const score = proseScore * 10 + sizeScore;
+            if (score > bestScore) {
+                bestScore = score;
+                best = el;
+            }
+        }
+        return best;
+    }
 
     function extractFromDoc(doc) {
         for (const { name, selector } of EXTRACTORS) {
@@ -62,14 +112,11 @@
                 return { text: el.innerHTML, selector: name };
             }
         }
-        // Text-density fallback: pick the largest <article> by textContent length.
-        const articles = Array.from(doc.querySelectorAll('article'));
-        if (articles.length) {
-            articles.sort((a, b) => (b.textContent || '').length - (a.textContent || '').length);
-            const candidate = articles[0];
-            if (candidate && (candidate.textContent || '').trim().length > 200) {
-                return { text: candidate.innerHTML, selector: 'article-density-fallback' };
-            }
+        // Aggressive density fallback: largest prose-like block on the page.
+        const dense = densityExtract(doc);
+        if (dense) {
+            const len = (dense.textContent || '').trim().length;
+            return { text: dense.innerHTML, selector: `density-fallback(${dense.tagName.toLowerCase()}.${classString(dense).slice(0, 24)})/len=${len}` };
         }
         return null;
     }
@@ -78,7 +125,7 @@
         // Lightweight DOM-shape signature for telemetry (NOT for security).
         const sig = Array.from(doc.querySelectorAll('main, article, [data-tag]'))
             .slice(0, 20)
-            .map((el) => `${el.tagName}.${(el.className || '').slice(0, 30)}.${el.getAttribute('data-tag') || ''}`)
+            .map((el) => `${el.tagName}.${classString(el).slice(0, 30)}.${el.getAttribute('data-tag') || ''}`)
             .join('|');
         let h = 0;
         for (let i = 0; i < sig.length; i++) {
@@ -193,8 +240,10 @@
         try {
             await apiPost(ENDPOINTS.paste(row.id), token, { raw_text: extract.text });
             console.info(`[MOTM] ingested row ${row.id} via ${extract.selector}`);
+            try { document.title = `[MOTM✓ ${row.id.slice(0, 8)}] ` + document.title; } catch (e) {}
         } catch (e) {
             console.warn('[MOTM] paste POST failed', e.message);
+            try { document.title = `[MOTM✗ paste-failed] ` + document.title; } catch (_) {}
         }
     }
 
@@ -347,5 +396,5 @@
         setTimeout(catchUpAll, 2000);
     }
 
-    console.info('[MOTM] userscript v1.2.0 loaded');
+    console.info('[MOTM] userscript v1.3.0 loaded');
 })();
