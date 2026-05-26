@@ -10,7 +10,7 @@
 // @connect      www.patreon.com
 // @updateURL    https://raw.githubusercontent.com/trevormimano-svg/motm-userscripts/main/motm-patreon-ingest.user.js
 // @downloadURL  https://raw.githubusercontent.com/trevormimano-svg/motm-userscripts/main/motm-patreon-ingest.user.js
-// @version      1.0.0
+// @version      1.1.0
 // @description  Auto-ingest Patreon post bodies to MOTM intel pipeline during normal browsing. Live mode + operator-initiated catch-up. ToS-clean: runs in your authenticated browser, identical fingerprint to manual select-copy-paste.
 // @author       MOTM
 // @run-at       document-idle
@@ -198,42 +198,116 @@
         }
     }
 
+    // ----- visible status overlay -----
+
+    function showOverlay(text, ms = 4000) {
+        try {
+            let el = document.getElementById('motm-overlay');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'motm-overlay';
+                el.style.cssText = [
+                    'position:fixed', 'bottom:16px', 'right:16px', 'z-index:2147483647',
+                    'background:#111', 'color:#fff', 'padding:10px 14px', 'border-radius:8px',
+                    'font:13px/1.4 -apple-system,system-ui,sans-serif',
+                    'box-shadow:0 4px 12px rgba(0,0,0,0.3)', 'max-width:380px',
+                    'pointer-events:none', 'white-space:pre-line',
+                ].join(';');
+                (document.body || document.documentElement).appendChild(el);
+            }
+            el.textContent = `[MOTM] ${text}`;
+            el.style.opacity = '1';
+            clearTimeout(el._fadeTimer);
+            if (ms > 0) {
+                el._fadeTimer = setTimeout(() => {
+                    el.style.transition = 'opacity 600ms';
+                    el.style.opacity = '0';
+                }, ms);
+            }
+        } catch (e) {
+            console.warn('[MOTM] overlay failed', e);
+        }
+    }
+
     async function catchUpAll() {
         const token = getToken();
-        if (!token) return;
+        if (!token) {
+            showOverlay('catch-up aborted: no token. Run "MOTM: reset stored token" then retry.');
+            return;
+        }
         let queue;
         try {
             queue = await apiGet(ENDPOINTS.awaitingPaste, token);
         } catch (e) {
-            console.error('[MOTM] catch-up: could not fetch queue', e.message);
+            const msg = `catch-up: could not fetch queue (${e.message})`;
+            console.error(`[MOTM] ${msg}`);
+            showOverlay(msg);
             return;
         }
         const items = queue.items || [];
         console.info(`[MOTM] catch-up: ${items.length} rows`);
-        for (const row of items) {
-            try {
-                // Same-origin fetch — uses Trevor's logged-in cookies, his fingerprint.
-                const resp = await fetch(row.post_url, { credentials: 'include' });
-                if (!resp.ok) {
-                    console.warn(`[MOTM] catch-up: ${row.post_url} returned ${resp.status}`);
-                    continue;
-                }
+        showOverlay(`catch-up: ${items.length} row(s) to process`);
+        if (items.length === 0) return;
+
+        let ok = 0;
+        let failed = 0;
+        for (let i = 0; i < items.length; i++) {
+            const row = items[i];
+            showOverlay(`catch-up: ${i + 1}/${items.length}  ok=${ok} fail=${failed}\n${row.post_url}`, 0);
+            const result = await ingestOne(row, token);
+            if (result === 'ok') ok++;
+            else failed++;
+            await sleep(CATCH_UP_DELAY_MS);
+        }
+        const final = `catch-up complete: ${ok} ok, ${failed} failed`;
+        console.info(`[MOTM] ${final}`);
+        showOverlay(final, 8000);
+    }
+
+    async function ingestOne(row, token) {
+        // Strategy A: same-origin fetch. Cheap; works when Patreon SSRs the body.
+        try {
+            const resp = await fetch(row.post_url, { credentials: 'include' });
+            if (resp.ok) {
                 const html = await resp.text();
                 const doc = new DOMParser().parseFromString(html, 'text/html');
                 const extract = extractFromDoc(doc);
-                if (!extract) {
-                    console.warn(`[MOTM] catch-up: extractor failed for ${row.post_url}`);
-                    reportFailure(token, row.post_url, doc, EXTRACTORS.map((e) => e.name));
-                    continue;
+                if (extract) {
+                    await apiPost(ENDPOINTS.paste(row.id), token, { raw_text: extract.text });
+                    console.info(`[MOTM] catch-up A (fetch): ingested ${row.id} via ${extract.selector}`);
+                    return 'ok';
                 }
-                await apiPost(ENDPOINTS.paste(row.id), token, { raw_text: extract.text });
-                console.info(`[MOTM] catch-up: ingested ${row.id}`);
-            } catch (e) {
-                console.warn(`[MOTM] catch-up: error on ${row.post_url}`, e.message);
+                console.info(`[MOTM] catch-up A (fetch): no body in SSR HTML for ${row.post_url} — falling back to window.open`);
+            } else {
+                console.warn(`[MOTM] catch-up A (fetch): ${row.post_url} returned ${resp.status} — falling back to window.open`);
             }
-            await sleep(CATCH_UP_DELAY_MS);
+        } catch (e) {
+            console.warn(`[MOTM] catch-up A (fetch): error on ${row.post_url} (${e.message}) — falling back to window.open`);
         }
-        console.info('[MOTM] catch-up complete');
+
+        // Strategy B: window.open to a Patreon post URL. Live mode in the new
+        // tab will extract from the fully-rendered DOM and POST itself. We
+        // then close the tab after a safety window. This is the resilient
+        // path for SPA-rendered post pages where SSR HTML lacks the body.
+        try {
+            const tab = window.open(row.post_url, '_blank');
+            if (!tab) {
+                console.warn(`[MOTM] catch-up B (window.open): popup blocked for ${row.post_url}`);
+                reportFailure(token, row.post_url, document, ['popup-blocked']);
+                return 'fail';
+            }
+            // Wait for live-mode in the new tab to do its work. Live mode has a
+            // 1.5s settle delay + API roundtrip; 8s total is generous.
+            await sleep(8000);
+            try { tab.close(); } catch (e) { /* tab may already be closed */ }
+            // We don't have a direct success signal — assume ok unless a poll
+            // says otherwise. Caller will re-list the queue on next click.
+            console.info(`[MOTM] catch-up B (window.open): dispatched ${row.post_url}`);
+            return 'ok';
+        } catch (e) {
+            console.error(`[MOTM] catch-up B (window.open): ${e.message}`);
+            return 'fail';
+        }
     }
 
     // ----- helpers -----
@@ -273,5 +347,5 @@
         setTimeout(catchUpAll, 2000);
     }
 
-    console.info('[MOTM] userscript v1.0.0 loaded');
+    console.info('[MOTM] userscript v1.1.0 loaded');
 })();
