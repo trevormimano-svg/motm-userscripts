@@ -6,11 +6,11 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
-// @connect      api-motm-v2-production.up.railway.app
+// @connect      api.motm.trevormimano.com
 // @connect      www.patreon.com
 // @updateURL    https://raw.githubusercontent.com/trevormimano-svg/motm-userscripts/main/motm-patreon-ingest.user.js
 // @downloadURL  https://raw.githubusercontent.com/trevormimano-svg/motm-userscripts/main/motm-patreon-ingest.user.js
-// @version      1.1.0
+// @version      1.2.0
 // @description  Auto-ingest Patreon post bodies to MOTM intel pipeline during normal browsing. Live mode + operator-initiated catch-up. ToS-clean: runs in your authenticated browser, identical fingerprint to manual select-copy-paste.
 // @author       MOTM
 // @run-at       document-idle
@@ -19,7 +19,7 @@
 (function () {
     'use strict';
 
-    const API_BASE = 'https://api-motm-v2-production.up.railway.app';
+    const API_BASE = 'https://api.motm.trevormimano.com';
     const ENDPOINTS = {
         awaitingPaste: `${API_BASE}/api/motm/intel/awaiting-paste`,
         paste: (id) => `${API_BASE}/api/motm/review/${id}/paste`,
@@ -347,5 +347,5 @@
         setTimeout(catchUpAll, 2000);
     }
 
-    console.info('[MOTM] userscript v1.1.0 loaded');
+    console.info('[MOTM] userscript v1.2.0 loaded');
 })();
