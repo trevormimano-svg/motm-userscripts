@@ -10,7 +10,7 @@
 // @connect      www.patreon.com
 // @updateURL    https://raw.githubusercontent.com/trevormimano-svg/motm-userscripts/main/motm-patreon-ingest.user.js
 // @downloadURL  https://raw.githubusercontent.com/trevormimano-svg/motm-userscripts/main/motm-patreon-ingest.user.js
-// @version      1.3.0
+// @version      1.3.1
 // @description  Auto-ingest Patreon post bodies to MOTM intel pipeline during normal browsing. Live mode + operator-initiated catch-up. ToS-clean: runs in your authenticated browser, identical fingerprint to manual select-copy-paste.
 // @author       MOTM
 // @run-at       document-idle
@@ -27,7 +27,7 @@
     };
     const TOKEN_KEY = 'motm_patreon_ingest_token';
     const CATCH_UP_DELAY_MS = 800;
-    const POST_URL_RE = /^https?:\/\/(?:www\.)?patreon\.com\/posts\/[^?#]+/i;
+    const POST_URL_RE = /^https?:\/\/(?:www\.)?patreon\.com\/(?:[^\/?#]+\/)?posts\/[^?#]+/i;
 
     // ----- token bootstrap -----
 
@@ -368,7 +368,18 @@
 
     function urlsMatch(a, b) {
         if (!a || !b) return false;
-        const norm = (u) => u.replace(/^https?:\/\/(?:www\.)?/, '').replace(/[?#].*$/, '').replace(/\/$/, '');
+        // Prefer the stable numeric post-id: robust to creator-prefix
+        // (/moneyotm/posts/...) vs bare (/posts/...) and to query/token tails.
+        const postId = (u) => (u.match(/posts\/(?:[^\/?#]*-)?(\d+)/) || [])[1];
+        const ia = postId(a), ib = postId(b);
+        if (ia && ib) return ia === ib;
+        // Fallback: normalize protocol/www/query/trailing-slash AND collapse a
+        // creator segment so /<creator>/posts/ compares equal to /posts/.
+        const norm = (u) => u
+            .replace(/^https?:\/\/(?:www\.)?/, '')
+            .replace(/[?#].*$/, '')
+            .replace(/\/$/, '')
+            .replace(/^patreon\.com\/[^\/]+\/posts\//, 'patreon.com/posts/');
         return norm(a) === norm(b);
     }
 
