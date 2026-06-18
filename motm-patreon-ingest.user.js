@@ -6,11 +6,12 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
+// @grant        GM_info
 // @connect      api.motm.trevormimano.com
 // @connect      www.patreon.com
 // @updateURL    https://raw.githubusercontent.com/trevormimano-svg/motm-userscripts/main/motm-patreon-ingest.user.js
 // @downloadURL  https://raw.githubusercontent.com/trevormimano-svg/motm-userscripts/main/motm-patreon-ingest.user.js
-// @version      1.3.1
+// @version      1.4.0
 // @description  Auto-ingest Patreon post bodies to MOTM intel pipeline during normal browsing. Live mode + operator-initiated catch-up. ToS-clean: runs in your authenticated browser, identical fingerprint to manual select-copy-paste.
 // @author       MOTM
 // @run-at       document-idle
@@ -45,6 +46,9 @@
         }
         return t;
     }
+
+    const SCRIPT_VERSION =
+        (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || 'unknown';
 
     // ----- multi-selector extractor -----
 
@@ -142,6 +146,7 @@
             headers: {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${token}`,
+                'X-MOTM-Userscript-Version': SCRIPT_VERSION,
             },
             data: JSON.stringify({
                 post_url: postUrl,
@@ -162,7 +167,10 @@
             GM_xmlhttpRequest({
                 method: 'GET',
                 url,
-                headers: { Authorization: `Bearer ${token}` },
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'X-MOTM-Userscript-Version': SCRIPT_VERSION,
+                },
                 timeout: 15000,
                 onload: (resp) => {
                     if (resp.status >= 200 && resp.status < 300) {
@@ -189,6 +197,7 @@
                 headers: {
                     'Content-Type': 'application/json',
                     Authorization: `Bearer ${token}`,
+                    'X-MOTM-Userscript-Version': SCRIPT_VERSION,
                 },
                 data: JSON.stringify(body),
                 timeout: 15000,
